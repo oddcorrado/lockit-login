@@ -6,7 +6,7 @@ var util = require('util');
 var express = require('express');
 var ms = require('ms');
 var moment = require('moment');
-var utils = require('lockit-utils');
+var utils = require('../lockit-utilities');
 var pwd = require('couch-pwd');
 
 /**
