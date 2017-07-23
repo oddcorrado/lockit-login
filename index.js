@@ -190,7 +190,7 @@ Login.prototype.postLogin = function(req, res, next) {
     // compare credentials with data in db
     pwd.hash(password, user.salt, function(hashErr, hash) {
       if (hashErr) {return next(hashErr); }
-
+console.log("checking login" , hash, password, user.salt)
       if (hash !== user.derived_key) {
         // set the default error message
         var errorMessage = 'Invalid user or password';
@@ -229,6 +229,8 @@ Login.prototype.postLogin = function(req, res, next) {
             basedir: req.app.get('views')
           });
         });
+
+        cb(errorMessage);
 
         return;
 
@@ -280,6 +282,7 @@ Login.prototype.postLogin = function(req, res, next) {
             // redirect to target url
             res.redirect(target);
           }
+
           return;
         }
 
@@ -374,8 +377,6 @@ Login.prototype.postTwoFactor = function(req, res, next) {
 
 };
 
-
-
 /**
  * POST /logout route handling function.
  *
@@ -419,6 +420,148 @@ Login.prototype.postLogout = function(req, res) {
       });
 
     }
+  });
+
+};
+
+/**
+ * POST /passwordCheck route handling function.
+ *
+ * @param {Object} req
+ * @param {Object} res
+ * @param {Function} next
+ */
+Login.prototype.passwordCheck = function (req, password, cb) {
+
+  var adapter = this.adapter;
+  var config = this.config;
+
+  var error = '';
+
+  // save redirect url
+  var suffix = req.query.redirect ? '?redirect=' + encodeURIComponent(req.query.redirect) : '';
+
+  // custom or built-in view
+  var view = config.login.views.login || join('get-login');
+
+  // check for valid status
+  if (!req.session && !req.session.isLogged && !req.session.email) {
+    error = 'Please login first';
+
+    cb(error);
+    return
+  }
+
+  var login = req.session.email;
+
+  // check for valid inputs
+  if (!login || !password) {
+    error = 'Please enter your password';
+
+    cb(error);
+    return
+  }
+
+  // check if login is a name or an email address
+
+  // regexp from https://github.com/angular/angular.js/blob/master/src/ng/directive/input.js#L4
+  var EMAIL_REGEXP = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,6}$/;
+  var query = EMAIL_REGEXP.test(login) ? 'email' : 'name';
+
+  // find user in db
+  adapter.find(query, login, function(err, user) {
+    if (err) {return err }
+
+    // no user or user email isn't verified yet -> render error message
+    if (!user || !user.emailVerified) {
+      error = 'Invalid user or password';
+
+      cb(error);
+      return;
+    }
+
+    // check for too many failed login attempts
+    if (user.accountLocked && new Date(user.accountLockedUntil) > new Date()) {
+      error = 'The account is temporarily locked';
+
+      cb(error);
+      return;
+    }
+
+    // if user comes from couchdb it has an 'iterations' key
+    if (user.iterations) {pwd.iterations(user.iterations); }
+
+    // compare credentials with data in db
+    pwd.hash(password, user.salt, function(hashErr, hash) {
+
+      console.log("checking password check" , hash, password, user.salt)
+      if (hashErr) {cb(hashErr); return; }
+
+      if (hash !== user.derived_key) {
+        // set the default error message
+        var errorMessage = 'Invalid user or password';
+
+        // increase failed login attempts
+        user.failedLoginAttempts += 1;
+
+        // lock account on too many login attempts (defaults to 5)
+        if (user.failedLoginAttempts >= config.failedLoginAttempts) {
+          user.accountLocked = true;
+
+          // set locked time to 20 minutes (default value)
+          var timespan = ms(config.accountLockedTime);
+          user.accountLockedUntil = moment().add(timespan, 'ms').toDate();
+
+          errorMessage = 'Invalid user or password. Your account is now locked for ' + config.accountLockedTime;
+        } else if (user.failedLoginAttempts >= config.failedLoginsWarning) {
+          // show a warning after 3 (default setting) failed login attempts
+          errorMessage = 'Invalid user or password. Your account will be locked soon.';
+        }
+
+        // save user to db
+        adapter.update(user, function(updateErr) {
+          if (updateErr) {cb (updateErr); return; }
+        });
+
+        cb(errorMessage);
+        return errorMessage;
+
+      }
+
+      // looks like password is correct
+
+      // shift tracking values
+      var now = new Date();
+
+      // update previous login time and ip
+      user.previousLoginTime = user.currentLoginTime || now;
+      user.previousLoginIp = user.currentLoginIp || req.ip;
+
+      // save login time
+      user.currentLoginTime = now;
+      user.currentLoginIp = req.ip;
+
+      // set failed login attempts to zero but save them in the session
+      req.session.failedLoginAttempts = user.failedLoginAttempts;
+      user.failedLoginAttempts = 0;
+      user.accountLocked = false;
+
+      // save user to db
+      adapter.update(user, function(updateErr, updatedUser) {
+        if (updateErr) {cb (updateErr); return; }
+
+        // check if two-factor authentication is enabled
+        if (!updatedUser.twoFactorEnabled) {
+
+          // let lockit handle the response
+          cb('success')
+          return;
+        }
+
+      });
+
+    });
+
   });
 
 };
