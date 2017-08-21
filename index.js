@@ -190,7 +190,7 @@ Login.prototype.postLogin = function(req, res, next) {
     // compare credentials with data in db
     pwd.hash(password, user.salt, function(hashErr, hash) {
       if (hashErr) {return next(hashErr); }
-console.log("checking login" , hash, password, user.salt)
+
       if (hash !== user.derived_key) {
         // set the default error message
         var errorMessage = 'Invalid user or password';
@@ -229,8 +229,6 @@ console.log("checking login" , hash, password, user.salt)
             basedir: req.app.get('views')
           });
         });
-
-        cb(errorMessage);
 
         return;
 
